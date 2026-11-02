@@ -385,6 +385,108 @@ impl Index {
         }
     }
 
+    /// документация при наведении курсора на тег или атрибут
+    fn hover(&self, text: &str, off: usize) -> Option<Hover> {
+        let before = &text[..off];
+        let lt = before.rfind('<')?;
+        if before[lt..].contains('>') || inside_quotes(&before[lt + 1..]) {
+            return None;
+        }
+
+        let start = before
+            .char_indices()
+            .rev()
+            .take_while(|&(_, c)| is_ident_char(c))
+            .last()
+            .map(|(i, _)| i)
+            .unwrap_or(off);
+        let end = off
+            + text[off..]
+                .chars()
+                .take_while(|&c| is_ident_char(c))
+                .map(char::len_utf8)
+                .sum::<usize>();
+
+        if start == end {
+            return None;
+        }
+        let word = &text[start..end];
+        let before_word = text[lt + 1..start].trim_start_matches('/');
+
+        let md = if before_word.is_empty() {
+            // Курсор на имени самого тега (<Button или </Button>)
+            let (_, full) = self.tags.iter().find(|(n, _)| n == word)?;
+            let t = self.types.get(full)?;
+            if t.summary.is_empty() {
+                format!("```csharp\n{full}\n```")
+            } else {
+                format!("```csharp\n{full}\n```\n---\n{}", t.summary)
+            }
+        } else if let Some((owner, prop)) = word.split_once('.') {
+            // Курсор на прикреплённом свойстве (например Grid.Row)
+            let (_, full) = self.tags.iter().find(|(n, _)| n == owner)?;
+            let t = self.types.get(full)?;
+            if !t.attached.iter().any(|a| a == prop) {
+                return None;
+            }
+            let doc = t
+                .docs
+                .get(&format!("A:{prop}"))
+                .cloned()
+                .unwrap_or_default();
+            if doc.is_empty() {
+                format!("```csharp\n{}.{prop} (attached property)\n```", t.name)
+            } else {
+                format!(
+                    "```csharp\n{}.{prop} (attached property)\n```\n---\n{doc}",
+                    t.name
+                )
+            }
+        } else {
+            // Курсор на обычном свойстве или событии внутри тега
+            let tag_name = before_word
+                .split(char::is_whitespace)
+                .next()?
+                .trim_end_matches('/');
+            let (_, full) = self.tags.iter().find(|(n, _)| n == tag_name)?;
+            let mut found = None;
+            for t in self.chain(full) {
+                if t.properties.iter().any(|p| p == word) {
+                    let doc = t
+                        .docs
+                        .get(&format!("P:{word}"))
+                        .cloned()
+                        .unwrap_or_default();
+                    found = Some((&t.name, "property", doc));
+                    break;
+                }
+                if t.events.iter().any(|e| e == word) {
+                    let doc = t
+                        .docs
+                        .get(&format!("E:{word}"))
+                        .cloned()
+                        .unwrap_or_default();
+                    found = Some((&t.name, "event", doc));
+                    break;
+                }
+            }
+            let (owner, kind, doc) = found?;
+            if doc.is_empty() {
+                format!("```csharp\n{owner}.{word} ({kind})\n```")
+            } else {
+                format!("```csharp\n{owner}.{word} ({kind})\n```\n---\n{doc}")
+            }
+        };
+
+        Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: md,
+            }),
+            range: None,
+        })
+    }
+
     /// семантические токены: 0 = свойство, 1 = событие
     fn semantic_tokens(&self, text: &str) -> Vec<SemanticToken> {
         let mut line_starts = vec![0usize];
@@ -620,6 +722,7 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec![
                         "<".into(),
@@ -704,6 +807,23 @@ impl LanguageServer for Backend {
         };
 
         Ok(Some(CompletionResponse::Array(index.complete(ctx))))
+    }
+
+    async fn hover(&self, p: HoverParams) -> Result<Option<Hover>> {
+        let Some(index) = &self.index else {
+            return Ok(None);
+        };
+        let uri = p.text_document_position_params.text_document.uri;
+        let pos = p.text_document_position_params.position;
+
+        let docs = self.docs.lock().unwrap();
+        let Some(text) = docs.get(&uri) else {
+            return Ok(None);
+        };
+        let Some(off) = offset(text, pos) else {
+            return Ok(None);
+        };
+        Ok(index.hover(text, off))
     }
 
     async fn semantic_tokens_full(
