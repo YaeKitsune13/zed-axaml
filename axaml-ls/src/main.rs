@@ -24,7 +24,7 @@ struct Index {
 enum Ctx {
     None,
     Tag,
-    Attr(String),
+    Attr(String, String),
 }
 
 impl Index {
@@ -91,7 +91,7 @@ impl Index {
                     ..Default::default()
                 })
                 .collect(),
-            Ctx::Attr(tag) => {
+            Ctx::Attr(tag, prefix) => {
                 let Some((_, full)) = self.tags.iter().find(|(n, _)| *n == tag) else {
                     return vec![];
                 };
@@ -100,17 +100,18 @@ impl Index {
 
                 for t in self.chain(full) {
                     for p in &t.properties {
-                        // "Item" это индексатор, в XAML он не нужен
                         if p == "Item" || !seen.insert(p.clone()) {
                             continue;
                         }
                         items.push(attr_item(p.clone(), &t.name));
                     }
                 }
-                // прикреплённые свойства: Grid.Row, ToolTip.Tip и т.п.
-                for t in self.types.values() {
-                    for a in &t.attached {
-                        items.push(attr_item(format!("{}.{}", t.name, a), "attached"));
+
+                if prefix.contains('.') {
+                    for t in self.types.values() {
+                        for a in &t.attached {
+                            items.push(attr_item(format!("{}.{}", t.name, a), "attached"));
+                        }
                     }
                 }
                 items
@@ -170,7 +171,15 @@ fn context(before: &str) -> Ctx {
             if seg.matches('"').count() % 2 == 1 {
                 return Ctx::None;
             }
-            Ctx::Attr(seg[..ws].to_string())
+            let prefix: String = seg
+                .chars()
+                .rev()
+                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.')
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            Ctx::Attr(seg[..ws].to_string(), prefix)
         }
     }
 }
@@ -221,7 +230,10 @@ impl LanguageServer for Backend {
 
     async fn did_change(&self, p: DidChangeTextDocumentParams) {
         if let Some(c) = p.content_changes.into_iter().last() {
-            self.docs.lock().unwrap().insert(p.text_document.uri, c.text);
+            self.docs
+                .lock()
+                .unwrap()
+                .insert(p.text_document.uri, c.text);
         }
     }
 

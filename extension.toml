@@ -6,6 +6,11 @@ authors = ["YaeKitsune13 aepnaonp@gmail.com"]
 description = "AXAML language server for Avalonia"
 repository = "https://github.com/YaeKitsune13/zed-axaml"
 
+[grammars.xml]
+repository = "https://github.com/tree-sitter-grammars/tree-sitter-xml"
+rev = "5000ae8f22d11fbe93939b05c1e37cf21117162d"
+path = "xml"
+
 [language_servers.axaml-ls]
 name = "AXAML LS"
-languages = ["XML"]
+languages = ["AXAML"]
