@@ -2,10 +2,10 @@ id = "axaml"
 name = "AXAML"
 version = "0.0.1"
 schema_version = 1
-authors = ["YaeKitsune13"]
-description = "Avalonia AXAML language server"
+authors = ["YaeKitsune13 aepnaonp@gmail.com"]
+description = "AXAML language server for Avalonia"
 repository = "https://github.com/YaeKitsune13/zed-axaml"
 
-[language_servers.avalonia-ls]
-name = "Avalonia LS"
+[language_servers.axaml-ls]
+name = "AXAML LS"
 languages = ["XML"]
