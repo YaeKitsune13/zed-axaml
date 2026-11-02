@@ -2,9 +2,10 @@ id = "axaml"
 name = "AXAML"
 version = "0.0.1"
 schema_version = 1
-authors = ["YaeKitsune13 aepnaonp@gmail.com"]
+authors = ["YaeKitsune13 <aepnaonp@gmail.com>"]
 description = "AXAML language server for Avalonia"
 repository = "https://github.com/YaeKitsune13/zed-axaml"
+languages = ["languages/axaml"]
 
 [grammars.xml]
 repository = "https://github.com/tree-sitter-grammars/tree-sitter-xml"

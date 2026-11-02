@@ -29,9 +29,20 @@ struct Index {
 
 enum Ctx {
     None,
-    Tag,
-    Close(String),
-    Attr(String, String), // (тег, набранный префикс)
+    Tag {
+        replace: Range,
+        has_close_bracket: bool,
+    },
+    Close {
+        name: String,
+        replace: Range,
+        has_close_bracket: bool,
+    },
+    Attr {
+        tag: String,
+        prefix: String,
+        replace: Range,
+    },
 }
 
 // ---------- разбор XML-тегов ----------
@@ -186,6 +197,17 @@ fn open_stack(text: &str) -> Vec<String> {
 
 // ---------- индекс ----------
 
+const TAG_BASES: &[&str] = &[
+    "Avalonia.Controls.Control",
+    "Avalonia.Application",
+    "Avalonia.Styling.StyleBase",
+    "Avalonia.Styling.SetterBase",
+    "Avalonia.Controls.DefinitionBase",
+    "Avalonia.Animation.KeyFrame",
+    "Avalonia.Animation.Animation",
+    "Avalonia.Controls.Templates.IDataTemplate",
+];
+
 impl Index {
     fn load() -> Option<Index> {
         let path = std::env::var("AXAML_META").ok().or_else(|| {
@@ -196,14 +218,19 @@ impl Index {
         let data = std::fs::read_to_string(path).ok()?;
         let types: HashMap<String, TypeMeta> = serde_json::from_str(&data).ok()?;
 
+        let mut seen_names = HashSet::new();
         let mut tags: Vec<(String, String)> = types
             .iter()
             .filter(|(full, t)| {
-                !t.name.contains('`') && Self::inherits(&types, full, "Avalonia.Controls.Control")
+                !t.name.contains('`')
+                    && TAG_BASES
+                        .iter()
+                        .any(|base| Self::inherits(&types, full, base))
             })
             .map(|(full, t)| (t.name.clone(), full.clone()))
             .collect();
         tags.sort();
+        tags.retain(|(name, _)| seen_names.insert(name.clone()));
 
         Some(Index { types, tags })
     }
@@ -249,31 +276,62 @@ impl Index {
     fn complete(&self, ctx: Ctx) -> Vec<CompletionItem> {
         match ctx {
             Ctx::None => vec![],
-            Ctx::Tag => self
+            Ctx::Tag {
+                replace,
+                has_close_bracket,
+            } => self
                 .tags
                 .iter()
-                .map(|(name, full)| CompletionItem {
-                    label: name.clone(),
-                    kind: Some(CompletionItemKind::CLASS),
-                    detail: Some(full.clone()),
-                    documentation: self
-                        .types
-                        .get(full)
-                        .filter(|t| !t.summary.is_empty())
-                        .map(|t| Documentation::String(t.summary.clone())),
-                    insert_text: Some(format!("{name}>$0</{name}>")),
-                    insert_text_format: Some(InsertTextFormat::SNIPPET),
-                    ..Default::default()
+                .map(|(name, full)| {
+                    let new_text = if has_close_bracket {
+                        name.clone()
+                    } else {
+                        format!("{name}>$0</{name}>")
+                    };
+                    CompletionItem {
+                        label: name.clone(),
+                        kind: Some(CompletionItemKind::CLASS),
+                        detail: Some(full.clone()),
+                        documentation: self
+                            .types
+                            .get(full)
+                            .filter(|t| !t.summary.is_empty())
+                            .map(|t| Documentation::String(t.summary.clone())),
+                        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                            range: replace,
+                            new_text,
+                        })),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        ..Default::default()
+                    }
                 })
                 .collect(),
-            Ctx::Close(name) => vec![CompletionItem {
-                insert_text: Some(format!("{name}>")),
-                label: name,
-                kind: Some(CompletionItemKind::CLASS),
-                detail: Some("закрывающий тег".to_string()),
-                ..Default::default()
-            }],
-            Ctx::Attr(tag, prefix) => {
+            Ctx::Close {
+                name,
+                replace,
+                has_close_bracket,
+            } => {
+                let new_text = if has_close_bracket {
+                    name.clone()
+                } else {
+                    format!("{name}>")
+                };
+                vec![CompletionItem {
+                    label: name,
+                    kind: Some(CompletionItemKind::CLASS),
+                    detail: Some("закрывающий тег".to_string()),
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                        range: replace,
+                        new_text,
+                    })),
+                    ..Default::default()
+                }]
+            }
+            Ctx::Attr {
+                tag,
+                prefix,
+                replace,
+            } => {
                 let Some((_, full)) = self.tags.iter().find(|(n, _)| *n == tag) else {
                     return vec![];
                 };
@@ -291,6 +349,7 @@ impl Index {
                             &t.name,
                             CompletionItemKind::PROPERTY,
                             t.docs.get(&format!("P:{p}")),
+                            replace,
                         ));
                     }
                     for e in &t.events {
@@ -302,6 +361,7 @@ impl Index {
                             &t.name,
                             CompletionItemKind::EVENT,
                             t.docs.get(&format!("E:{e}")),
+                            replace,
                         ));
                     }
                 }
@@ -315,6 +375,7 @@ impl Index {
                                 "attached",
                                 CompletionItemKind::PROPERTY,
                                 t.docs.get(&format!("A:{a}")),
+                                replace,
                             ));
                         }
                     }
@@ -385,9 +446,13 @@ fn attr_item(
     detail: &str,
     kind: CompletionItemKind,
     doc: Option<&String>,
+    replace: Range,
 ) -> CompletionItem {
     CompletionItem {
-        insert_text: Some(format!("{label}=\"$0\"")),
+        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+            range: replace,
+            new_text: format!("{label}=\"$0\""),
+        })),
         insert_text_format: Some(InsertTextFormat::SNIPPET),
         documentation: doc
             .filter(|d| !d.is_empty())
@@ -418,8 +483,28 @@ fn offset(text: &str, pos: Position) -> Option<usize> {
     None
 }
 
+fn is_ident_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '.' || c == ':'
+}
+
+/// проверяет, находится ли конец среза внутри открытых кавычек ("..." или '...')
+fn inside_quotes(s: &str) -> bool {
+    let mut quote: Option<char> = None;
+    for c in s.chars() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            None if c == '"' || c == '\'' => quote = Some(c),
+            _ => {}
+        }
+    }
+    quote.is_some()
+}
+
 /// где стоит курсор: в имени тега, в закрывающем теге, в атрибутах или вне тега
-fn context(before: &str) -> Ctx {
+fn context(text: &str, off: usize, pos: Position) -> Ctx {
+    let before = &text[..off];
+    let after = &text[off..];
+
     let Some(lt) = before.rfind('<') else {
         return Ctx::None;
     };
@@ -430,12 +515,42 @@ fn context(before: &str) -> Ctx {
     }
     let seg = &before[lt + 1..];
 
+    // сколько символов имени тега/атрибута идёт сразу после курсора (если редактируем середину слова)
+    let after_ident_bytes: usize = after
+        .chars()
+        .take_while(|&c| is_ident_char(c))
+        .map(char::len_utf8)
+        .sum();
+    let after_ident_utf16: u32 = after[..after_ident_bytes]
+        .chars()
+        .map(|c| c.len_utf16() as u32)
+        .sum();
+    let rest_after_ident = after[after_ident_bytes..].trim_start();
+    let has_close_bracket = rest_after_ident.starts_with('>') || rest_after_ident.starts_with("/>");
+
+    let end_pos = Position {
+        line: pos.line,
+        character: pos.character + after_ident_utf16,
+    };
+
     if let Some(rest) = seg.strip_prefix('/') {
         if rest.contains(char::is_whitespace) {
             return Ctx::None;
         }
+        let prefix_utf16 = rest.encode_utf16().count() as u32;
+        let replace = Range {
+            start: Position {
+                line: pos.line,
+                character: pos.character.saturating_sub(prefix_utf16),
+            },
+            end: end_pos,
+        };
         return match open_stack(&before[..lt]).pop() {
-            Some(name) => Ctx::Close(name),
+            Some(name) => Ctx::Close {
+                name,
+                replace,
+                has_close_bracket,
+            },
             None => Ctx::None,
         };
     }
@@ -444,21 +559,49 @@ fn context(before: &str) -> Ctx {
     }
 
     match seg.find(char::is_whitespace) {
-        None => Ctx::Tag,
+        None => {
+            if seg.contains('/') {
+                return Ctx::None;
+            }
+            let prefix_utf16 = seg.encode_utf16().count() as u32;
+            let replace = Range {
+                start: Position {
+                    line: pos.line,
+                    character: pos.character.saturating_sub(prefix_utf16),
+                },
+                end: end_pos,
+            };
+            Ctx::Tag {
+                replace,
+                has_close_bracket,
+            }
+        }
         Some(ws) => {
-            // нечётное число кавычек: мы внутри значения атрибута
-            if seg.matches('"').count() % 2 == 1 {
+            if inside_quotes(seg) {
                 return Ctx::None;
             }
             let prefix: String = seg
                 .chars()
                 .rev()
-                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.')
+                .take_while(|&c| is_ident_char(c))
                 .collect::<Vec<_>>()
                 .into_iter()
                 .rev()
                 .collect();
-            Ctx::Attr(seg[..ws].to_string(), prefix)
+            let prefix_utf16 = prefix.encode_utf16().count() as u32;
+            let replace = Range {
+                start: Position {
+                    line: pos.line,
+                    character: pos.character.saturating_sub(prefix_utf16),
+                },
+                end: end_pos,
+            };
+            let tag_name = seg[..ws].trim_end_matches('/').to_string();
+            Ctx::Attr {
+                tag: tag_name,
+                prefix,
+                replace,
+            }
         }
     }
 }
@@ -478,7 +621,13 @@ impl LanguageServer for Backend {
                     TextDocumentSyncKind::FULL,
                 )),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(vec!["<".into(), " ".into(), ".".into(), "/".into()]),
+                    trigger_characters: Some(vec![
+                        "<".into(),
+                        " ".into(),
+                        ".".into(),
+                        "/".into(),
+                        ":".into(),
+                    ]),
                     ..Default::default()
                 }),
                 semantic_tokens_provider: Some(
@@ -551,7 +700,7 @@ impl LanguageServer for Backend {
             let Some(off) = offset(text, pos) else {
                 return Ok(None);
             };
-            context(&text[..off])
+            context(text, off, pos)
         };
 
         Ok(Some(CompletionResponse::Array(index.complete(ctx))))
