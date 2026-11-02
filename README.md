@@ -38,7 +38,7 @@ The project is split into two main utilities:
 Clone the repository and install the LSP binary to your system PATH:
 
 ```bash
-git clone [https://github.com/YaeKitsune13/zed-axaml.git](https://github.com/YaeKitsune13/zed-axaml.git)
+git clone https://github.com/YaeKitsune13/zed-axaml.git
 cd zed-axaml/axaml-ls
 cargo build --release
 sudo install -Dm755 target/release/axaml-ls /usr/local/bin/axaml-ls
