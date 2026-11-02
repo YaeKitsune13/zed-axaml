@@ -79,6 +79,7 @@ To make Zed use `axaml-ls` for `.axaml` files, add the following language server
 
 ---
 
-## License
+## License & Third-Party
 
 This project is open-source and available under the MIT License.
+See [THIRD-PARTY](THIRD-PARTY) for details regarding third-party code used in this repository.
