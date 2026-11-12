@@ -1,6 +1,6 @@
 [package]
 name = "zed-axaml"
-version = "0.0.1"
+version = "0.4.1"
 edition = "2021"
 
 [lib]

@@ -1,3 +1,4 @@
 name = "AXAML"
 grammar = "xml"
 path_suffixes = ["axaml", "xaml"]
+formatter = "language_server"
