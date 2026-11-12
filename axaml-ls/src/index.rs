@@ -1,7 +1,16 @@
-use crate::metadata::{TypeMeta, TAG_BASES, X_DIRECTIVES};
-use crate::parser::{inside_quotes, is_ident_char, scan, Ctx, Kind};
+use crate::metadata::{
+    enum_values_for_attr, TypeMeta, BINDING_SNIPPETS, EXTRA_TAGS, TAG_BASES, TAG_SNIPPETS,
+    X_DIRECTIVES,
+};
+use crate::parser::{byte_range_to_lsp, inside_quotes, is_ident_char, scan, Ctx, Kind};
 use std::collections::{HashMap, HashSet};
 use tower_lsp::lsp_types::*;
+
+pub struct EventAtCursor {
+    pub tag_name: String,
+    pub event_name: String,
+    pub handler_name: String,
+}
 
 pub struct Index {
     pub types: HashMap<String, TypeMeta>,
@@ -16,16 +25,30 @@ impl Index {
                 .map(|h| format!("{h}/.local/share/axaml-ls/meta.json"))
         })?;
         let data = std::fs::read_to_string(path).ok()?;
-        let types: HashMap<String, TypeMeta> = serde_json::from_str(&data).ok()?;
+        let mut types: HashMap<String, TypeMeta> = serde_json::from_str(&data).ok()?;
+
+        for &(name, full, summary) in EXTRA_TAGS {
+            types.entry(full.to_string()).or_insert_with(|| TypeMeta {
+                name: name.to_string(),
+                namespace: "Avalonia".to_string(),
+                base: None,
+                properties: vec!["DataType".to_string()],
+                attached: vec![],
+                events: vec![],
+                summary: summary.to_string(),
+                docs: HashMap::new(),
+            });
+        }
 
         let mut seen_names = HashSet::new();
         let mut tags: Vec<(String, String)> = types
             .iter()
             .filter(|(full, t)| {
                 !t.name.contains('`')
-                    && TAG_BASES
+                    && (TAG_BASES
                         .iter()
                         .any(|base| Self::inherits(&types, full, base))
+                        || EXTRA_TAGS.iter().any(|&(_, ef, _)| ef == full.as_str()))
             })
             .map(|(full, t)| (t.name.clone(), full.clone()))
             .collect();
@@ -95,7 +118,8 @@ impl Index {
                     format!("{label}>$0</{label}>")
                 };
                 out.push(CompletionItem {
-                    label,
+                    label: label.clone(),
+                    sort_text: Some(format!("1_{label}")),
                     kind: Some(CompletionItemKind::PROPERTY),
                     detail: Some(format!("{}.{}", t.name, p)),
                     documentation: t
@@ -129,34 +153,53 @@ impl Index {
                     return items;
                 }
 
-                let mut items: Vec<CompletionItem> = self
-                    .tags
-                    .iter()
-                    .map(|(name, full)| {
-                        let new_text = if has_close_bracket {
-                            name.clone()
-                        } else {
-                            format!("{name}>$0</{name}>")
-                        };
-                        CompletionItem {
-                            label: name.clone(),
-                            kind: Some(CompletionItemKind::CLASS),
-                            detail: Some(full.clone()),
-                            documentation: self
-                                .types
-                                .get(full)
-                                .filter(|t| !t.summary.is_empty())
-                                .map(|t| Documentation::String(t.summary.clone())),
+                let mut items: Vec<CompletionItem> = Vec::new();
+
+                // 1. Готовые UI-сниппеты
+                if !has_close_bracket {
+                    for &(label, desc, body) in TAG_SNIPPETS {
+                        items.push(CompletionItem {
+                            label: label.to_string(),
+                            sort_text: Some(format!("0_{label}")),
+                            kind: Some(CompletionItemKind::SNIPPET),
+                            detail: Some(desc.to_string()),
                             text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                                 range: replace,
-                                new_text,
+                                new_text: body.to_string(),
                             })),
                             insert_text_format: Some(InsertTextFormat::SNIPPET),
                             ..Default::default()
-                        }
-                    })
-                    .collect();
+                        });
+                    }
+                }
 
+                // 2. Стандартные контролы и теги
+                for (name, full) in &self.tags {
+                    let new_text = if has_close_bracket {
+                        name.clone()
+                    } else {
+                        format!("{name}>$0</{name}>")
+                    };
+                    items.push(CompletionItem {
+                        label: name.clone(),
+                        sort_text: Some(format!("1_{name}")),
+                        kind: Some(CompletionItemKind::CLASS),
+                        detail: Some(full.clone()),
+                        documentation: self
+                            .types
+                            .get(full)
+                            .filter(|t| !t.summary.is_empty())
+                            .map(|t| Documentation::String(t.summary.clone())),
+                        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                            range: replace,
+                            new_text,
+                        })),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        ..Default::default()
+                    });
+                }
+
+                // 3. Вложенные свойства родителя (например, ListBox.ItemTemplate)
                 if let Some(p) = parent {
                     let owner = p.split('.').next().unwrap_or(&p);
                     self.push_prop_tags(owner, replace, has_close_bracket, &mut items);
@@ -188,6 +231,7 @@ impl Index {
             Ctx::Attr {
                 tag,
                 prefix,
+                ancestors,
                 replace,
             } => {
                 if tag.contains('.') {
@@ -199,57 +243,142 @@ impl Index {
                 let mut seen = HashSet::new();
                 let mut items = Vec::new();
 
+                // 1. Контекстные Attached-свойства от открытых родителей (Grid.Column, DockPanel.Dock)
+                for anc in ancestors.iter().rev() {
+                    let anc_base = anc.split('.').next().unwrap_or(anc);
+                    if let Some(t) = self.types.values().find(|t| t.name == anc_base) {
+                        for a in &t.attached {
+                            let label = format!("{}.{}", t.name, a);
+                            if seen.insert(label.clone()) {
+                                let mut item = attr_item(
+                                    label.clone(),
+                                    &format!("attached from parent <{}>", t.name),
+                                    CompletionItemKind::PROPERTY,
+                                    t.docs.get(&format!("A:{a}")),
+                                    replace,
+                                );
+                                item.sort_text = Some(format!("0_{label}"));
+                                items.push(item);
+                            }
+                        }
+                    }
+                }
+
+                // 2. Собственные свойства и события контрола
                 for t in self.chain(full) {
                     for p in &t.properties {
                         if p == "Item" || !seen.insert(p.clone()) {
                             continue;
                         }
-                        items.push(attr_item(
+                        let mut item = attr_item(
                             p.clone(),
                             &t.name,
                             CompletionItemKind::PROPERTY,
                             t.docs.get(&format!("P:{p}")),
                             replace,
-                        ));
+                        );
+                        item.sort_text = Some(format!("1_{p}"));
+                        items.push(item);
                     }
                     for e in &t.events {
                         if !seen.insert(e.clone()) {
                             continue;
                         }
-                        items.push(attr_item(
+                        let mut item = attr_item(
                             e.clone(),
                             &t.name,
                             CompletionItemKind::EVENT,
                             t.docs.get(&format!("E:{e}")),
                             replace,
-                        ));
+                        );
+                        item.sort_text = Some(format!("2_{e}"));
+                        items.push(item);
                     }
                 }
 
+                // 3. XAML-директивы (x:Name, x:DataType...)
                 for &(dir, desc) in X_DIRECTIVES {
                     let doc_str = desc.to_string();
-                    items.push(attr_item(
+                    let mut item = attr_item(
                         dir.to_string(),
                         "XAML directive",
                         CompletionItemKind::KEYWORD,
                         Some(&doc_str),
                         replace,
-                    ));
+                    );
+                    item.sort_text = Some(format!("0_{dir}"));
+                    items.push(item);
                 }
 
-                if prefix.contains('.') {
-                    for t in self.types.values() {
-                        for a in &t.attached {
-                            items.push(attr_item(
-                                format!("{}.{}", t.name, a),
+                // 4. Остальные часто используемые Attached-свойства (или все при вводе точки)
+                let has_dot = prefix.contains('.');
+                for t in self.types.values() {
+                    if !has_dot
+                        && !matches!(
+                            t.name.as_str(),
+                            "Grid" | "DockPanel" | "Canvas" | "ToolTip" | "ScrollViewer"
+                        )
+                    {
+                        continue;
+                    }
+                    for a in &t.attached {
+                        let label = format!("{}.{}", t.name, a);
+                        if seen.insert(label.clone()) {
+                            let mut item = attr_item(
+                                label.clone(),
                                 "attached",
                                 CompletionItemKind::PROPERTY,
                                 t.docs.get(&format!("A:{a}")),
                                 replace,
-                            ));
+                            );
+                            item.sort_text = Some(format!("3_{label}"));
+                            items.push(item);
                         }
                     }
                 }
+                items
+            }
+            Ctx::AttrValue {
+                tag: _,
+                attr,
+                prefix,
+                replace,
+            } => {
+                let mut items = Vec::new();
+
+                // 1. Если ещё не начали писать '{', предлагаем Enum-значения для конкретного атрибута
+                if !prefix.starts_with('{') {
+                    for &val in enum_values_for_attr(&attr) {
+                        items.push(CompletionItem {
+                            label: val.to_string(),
+                            sort_text: Some(format!("0_{val}")),
+                            kind: Some(CompletionItemKind::ENUM_MEMBER),
+                            detail: Some(format!("{attr} value")),
+                            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                                range: replace,
+                                new_text: val.to_string(),
+                            })),
+                            ..Default::default()
+                        });
+                    }
+                }
+
+                // 2. Маркап-расширения ({Binding}, {StaticResource}...)
+                for &(label, desc, snippet) in BINDING_SNIPPETS {
+                    items.push(CompletionItem {
+                        label: label.to_string(),
+                        sort_text: Some(format!("1_{label}")),
+                        kind: Some(CompletionItemKind::SNIPPET),
+                        detail: Some(desc.to_string()),
+                        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                            range: replace,
+                            new_text: snippet.to_string(),
+                        })),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        ..Default::default()
+                    });
+                }
+
                 items
             }
         }
@@ -366,6 +495,170 @@ impl Index {
         })
     }
 
+    pub fn diagnostics(&self, text: &str) -> Vec<Diagnostic> {
+        let mut diags = Vec::new();
+        let mut stack: Vec<(String, usize)> = Vec::new();
+
+        for tag in scan(text) {
+            match tag.kind {
+                Kind::Open => stack.push((tag.name.clone(), tag.name_off)),
+                Kind::SelfClose => {}
+                Kind::Close => {
+                    if let Some(pos) = stack.iter().rposition(|(n, _)| *n == tag.name) {
+                        for (unclosed_name, unclosed_off) in stack.drain(pos + 1..) {
+                            diags.push(Diagnostic {
+                                range: byte_range_to_lsp(
+                                    text,
+                                    unclosed_off,
+                                    unclosed_off + unclosed_name.len(),
+                                ),
+                                severity: Some(DiagnosticSeverity::ERROR),
+                                source: Some("axaml-ls".to_string()),
+                                message: format!("Незакрытый тег <{unclosed_name}>"),
+                                ..Default::default()
+                            });
+                        }
+                        stack.pop();
+                    } else {
+                        diags.push(Diagnostic {
+                            range: byte_range_to_lsp(
+                                text,
+                                tag.name_off,
+                                tag.name_off + tag.name.len(),
+                            ),
+                            severity: Some(DiagnosticSeverity::ERROR),
+                            source: Some("axaml-ls".to_string()),
+                            message: format!(
+                                "Закрывающий тег </{}> не имеет соответствующего открывающего тега",
+                                tag.name
+                            ),
+                            ..Default::default()
+                        });
+                    }
+                    continue;
+                }
+            }
+
+            // Пропускаем теги с кастомными XML-префиксами (например, local:MyControl)
+            if tag.name.contains(':') {
+                continue;
+            }
+
+            if let Some((owner, prop)) = tag.name.split_once('.') {
+                if let Some((_, full)) = self.tags.iter().find(|(n, _)| n == owner) {
+                    if self.find_member(full, prop).is_none()
+                        && !self.is_attached(&tag.name)
+                        && prop != "Resources"
+                        && prop != "Styles"
+                        && prop != "DataTemplates"
+                    {
+                        diags.push(Diagnostic {
+                            range: byte_range_to_lsp(
+                                text,
+                                tag.name_off,
+                                tag.name_off + tag.name.len(),
+                            ),
+                            severity: Some(DiagnosticSeverity::WARNING),
+                            source: Some("axaml-ls".to_string()),
+                            message: format!("Неизвестное свойство <{}> у {owner}", tag.name),
+                            ..Default::default()
+                        });
+                    }
+                }
+                continue;
+            }
+
+            let Some((_, full)) = self.tags.iter().find(|(n, _)| *n == tag.name) else {
+                diags.push(Diagnostic {
+                    range: byte_range_to_lsp(text, tag.name_off, tag.name_off + tag.name.len()),
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    source: Some("axaml-ls".to_string()),
+                    message: format!("Неизвестный контрол или тег Avalonia: <{}>", tag.name),
+                    ..Default::default()
+                });
+                continue;
+            };
+
+            let chain = self.chain(full);
+            for attr in &tag.attrs {
+                let aname = &attr.name;
+                if aname == "xmlns"
+                    || aname.starts_with("xmlns:")
+                    || aname.starts_with("mc:")
+                    || aname.starts_with("d:")
+                    || X_DIRECTIVES.iter().any(|&(d, _)| d == aname)
+                {
+                    continue;
+                }
+                if aname.contains(':') {
+                    continue;
+                }
+
+                let is_known = chain
+                    .iter()
+                    .any(|t| t.properties.contains(aname) || t.events.contains(aname))
+                    || self.is_attached(aname)
+                    || (tag.name == "DataTemplate" && aname == "DataType");
+
+                if !is_known {
+                    diags.push(Diagnostic {
+                        range: byte_range_to_lsp(text, attr.name_off, attr.name_off + aname.len()),
+                        severity: Some(DiagnosticSeverity::WARNING),
+                        source: Some("axaml-ls".to_string()),
+                        message: format!(
+                            "Неизвестное свойство или событие '{aname}' у <{}>",
+                            tag.name
+                        ),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+
+        for (unclosed_name, unclosed_off) in stack {
+            diags.push(Diagnostic {
+                range: byte_range_to_lsp(text, unclosed_off, unclosed_off + unclosed_name.len()),
+                severity: Some(DiagnosticSeverity::ERROR),
+                source: Some("axaml-ls".to_string()),
+                message: format!("Незакрытый тег <{unclosed_name}>"),
+                ..Default::default()
+            });
+        }
+
+        diags
+    }
+
+    pub fn event_at_offset(&self, text: &str, off: usize) -> Option<EventAtCursor> {
+        for tag in scan(text) {
+            if tag.kind == Kind::Close {
+                continue;
+            }
+            let Some((_, full)) = self.tags.iter().find(|(n, _)| *n == tag.name) else {
+                continue;
+            };
+            let chain = self.chain(full);
+
+            for attr in &tag.attrs {
+                let Some(val) = &attr.value else { continue };
+                let Some(val_off) = attr.value_off else {
+                    continue;
+                };
+                let attr_end = val_off + val.len() + 1;
+                if off >= attr.name_off && off <= attr_end {
+                    let is_event = chain.iter().any(|t| t.events.contains(&attr.name));
+                    if is_event && !val.is_empty() && !val.starts_with('{') {
+                        return Some(EventAtCursor {
+                            tag_name: tag.name.clone(),
+                            event_name: attr.name.clone(),
+                            handler_name: val.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        None
+    }
+
     pub fn semantic_tokens(&self, text: &str) -> Vec<SemanticToken> {
         let mut line_starts = vec![0usize];
         let mut raw = Vec::new();
@@ -385,21 +678,23 @@ impl Index {
             };
             let chain = self.chain(full);
 
-            for (attr, off) in &tag.attrs {
-                let ty = if chain.iter().any(|t| t.events.contains(attr)) {
+            for attr in &tag.attrs {
+                let aname = &attr.name;
+                let off = attr.name_off;
+                let ty = if chain.iter().any(|t| t.events.contains(aname)) {
                     1
-                } else if chain.iter().any(|t| t.properties.contains(attr))
-                    || self.is_attached(attr)
-                    || X_DIRECTIVES.iter().any(|&(d, _)| d == attr)
+                } else if chain.iter().any(|t| t.properties.contains(aname))
+                    || self.is_attached(aname)
+                    || X_DIRECTIVES.iter().any(|&(d, _)| d == aname)
                 {
                     0
                 } else {
                     continue;
                 };
 
-                let line = line_starts.partition_point(|&s| s <= *off) - 1;
-                let col = text[line_starts[line]..*off].encode_utf16().count() as u32;
-                let len = attr.encode_utf16().count() as u32;
+                let line = line_starts.partition_point(|&s| s <= off) - 1;
+                let col = text[line_starts[line]..off].encode_utf16().count() as u32;
+                let len = aname.encode_utf16().count() as u32;
                 raw.push((line as u32, col, len, ty));
             }
         }
