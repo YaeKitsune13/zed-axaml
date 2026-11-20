@@ -1,6 +1,6 @@
 id = "axaml"
 name = "AXAML"
-version = "0.2.1"
+version = "0.2"
 schema_version = 1
 authors = ["YaeKitsune13 <aepnaonp@gmail.com>"]
 description = "AXAML language server for Avalonia"
