@@ -11,9 +11,10 @@ struct TypeMeta {
     properties: Vec<String>,
     attached: Vec<String>,
     events: Vec<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    event_args: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "String::is_empty")]
     summary: String,
-    /// ключи: "P:Имя" (свойство), "E:Имя" (событие), "A:Имя" (прикреплённое)
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     docs: BTreeMap<String, String>,
 }
@@ -29,6 +30,24 @@ fn base_name(res: &Resolution<'_>, td: &TypeDefinition<'_>) -> Option<String> {
     }
 }
 
+fn member_type_name(res: &Resolution<'_>, t: &MemberType) -> Option<String> {
+    match t {
+        MemberType::Base(b) => match &**b {
+            BaseType::Type { source, .. } => match source {
+                TypeSource::User(u) => Some(u.type_name(res)),
+                TypeSource::Generic { base, parameters } => {
+                    let args: Vec<String> = parameters
+                        .iter()
+                        .filter_map(|p| member_type_name(res, p))
+                        .collect();
+                    Some(format!("{}<{}>", base.type_name(res), args.join(", ")))
+                }
+            },
+            _ => None,
+        },
+        _ => None,
+    }
+}
 fn own_members(td: &TypeDefinition<'_>) -> (Vec<String>, Vec<String>, Vec<String>) {
     let props: Vec<String> = td
         .properties
@@ -185,7 +204,6 @@ fn main() {
         .iter()
         .filter_map(|b| Resolution::parse(b, ReadOptions::default()).ok())
         .collect();
-
     let mut types: BTreeMap<String, TypeMeta> = BTreeMap::new();
     for res in &resolutions {
         for td in &res.type_definitions {
@@ -194,6 +212,16 @@ fn main() {
             }
             let full = td.type_name();
             let (properties, attached, events) = own_members(td);
+
+            let mut event_args = BTreeMap::new();
+            for e in &td.events {
+                let name = e.name.to_string();
+                if events.contains(&name) {
+                    if let Some(t) = member_type_name(res, &e.delegate_type) {
+                        event_args.insert(name, t);
+                    }
+                }
+            }
 
             let mut member_docs = BTreeMap::new();
             for p in &properties {
@@ -221,6 +249,7 @@ fn main() {
                     properties,
                     attached,
                     events,
+                    event_args,
                     summary: docs.get(&format!("T:{full}")).cloned().unwrap_or_default(),
                     docs: member_docs,
                 },
