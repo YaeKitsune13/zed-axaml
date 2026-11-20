@@ -1,85 +1,37 @@
 # zed-axaml
 
-A lightweight, high-performance Language Server Protocol (LSP) implementation tailored for editing **Avalonia XAML (`.axaml`)** files inside the [Zed editor](https://zed.dev/).
+Avalonia XAML (`.axaml`) language support and Language Server Protocol (`axaml-ls`) integration for the [Zed editor](https://zed.dev/).
 
-Built with Rust and `tower-lsp`, `axaml-ls` parses metadata directly from compiled Avalonia and .NET assemblies to provide native autocompletion, semantic highlighting, and documentation hovers without the heavy overhead of OmniSharp or full IDE stacks.
-
----
+`axaml-ls` reads metadata extracted from compiled Avalonia assemblies along with your project's `.cs` and `.axaml` files to provide autocompletion, code navigation, diagnostics, and code-behind generation.
 
 ## Features
 
-- **Smart Tag Completion:** Autocompletes Avalonia controls (`Button`, `TextBlock`, `Grid`, etc.) and automatically generates closing tags or snippet placeholders.
-- **Dot-Notation Property Elements:** Supports nested property tags such as `<Grid.RowDefinitions>` and `<Window.Styles>`.
-- **Attributes & Events:** Provides suggestions for control properties, events, and attached properties (e.g., `Grid.Row`), complete with inherited members across the inheritance chain.
-- **XAML Directives:** Built-in support for standard `x:` attributes (`x:Name`, `x:DataType`, `x:Class`, `x:Key`, `x:CompileBindings`).
-- **Documentation Hovers:** View C# summaries, types, and descriptions instantly by hovering over tags, properties, or events.
-- **Semantic Token Highlighting:** Differentiates properties and events inside XAML attributes.
+- **Tag & Property Completion:** Autocompletes Avalonia controls, dot-notation property elements (`<Grid.RowDefinitions>`, `<Window.Styles>`), attached properties (`Grid.Row`), and XAML directives (`x:Name`, `x:DataType`, `x:Class`, `x:Key`, `x:CompileBindings`).
+- **Styles & Setters:** Suggests control types and pseudo-classes (`:pointerover`, `:pressed`, `:focus`, etc.) inside `<Style Selector="...">`, and resolves target control properties and enum values inside `<Setter Property="..." Value="..." />`.
+- **Bindings & ViewModel Support:** Resolves `x:DataType` across the element tree to autocomplete properties and `[RelayCommand]` commands inside `{Binding}` and `{CompiledBinding}`, with diagnostics for invalid compiled binding paths.
+- **Resources & Navigation (`Go to Definition`):** Autocompletes `{StaticResource}` / `{DynamicResource}` keys from the current file and `App.axaml`, and jumps to resource definitions, `x:Class` declarations, event handlers in `.axaml.cs`, and custom controls.
+- **Code-Behind Generation & Code Actions:** Generates event handler stubs in `.axaml.cs` with matching `*EventArgs` signatures and `using` directives, initializes empty `.axaml` files as `UserControl` or `Window`, and syncs `x:Name` / `Name` fields for C# tooling.
+- **Hover Documentation & Formatting:** Shows C# XML summaries on hover, highlights properties and events via semantic tokens, and formats `.axaml` documents.
 
----
+## Repository Structure
 
-## Architecture
+- **`src/` & `languages/axaml/`** — Zed extension entry point (auto-downloads `axaml-ls` and `meta.json` from GitHub Releases if not present in `PATH`) and Tree-sitter syntax queries.
+- **`axaml-ls/`** — Standalone LSP server written in Rust (`tower-lsp`).
+- **`axaml-meta/`** — CLI utility that extracts type metadata and XML documentation from Avalonia `.dll` and `.xml` files into `meta.json`.
 
-The project is split into two main utilities:
+## Installation
 
-1. **`axaml-meta`** — A metadata extractor that scans `.dll` and `.xml` documentation files (from Avalonia NuGet packages) and serializes them into a compact JSON index (`meta.json`).
-2. **`axaml-ls`** — The LSP server itself, which indexes the layout in memory and serves real-time completion, hover, and token requests to Zed.
+### Via Zed Extensions
 
----
+Install **AXAML** directly from the Zed Extensions marketplace. On first launch, the extension automatically downloads the `axaml-ls` binary and default `meta.json` for your platform.
 
-## Installation & Setup
+### Building from Source
 
-### 1. Prerequisites
-
-- Rust toolchain (stable)
-- Cargo
-
-### 2. Build and Install
-
-Clone the repository and install the LSP binary to your system PATH:
+If you want to build and use a local version (the extension prioritizes `axaml-ls` found in `PATH`):
 
 ```bash
-git clone https://github.com/YaeKitsune13/zed-axaml.git
+git clone [https://github.com/YaeKitsune13/zed-axaml.git](https://github.com/YaeKitsune13/zed-axaml.git)
 cd zed-axaml/axaml-ls
 cargo build --release
-sudo install -Dm755 target/release/axaml-ls /usr/local/bin/axaml-ls
-
+install -Dm755 target/release/axaml-ls ~/.local/bin/axaml-ls
 ```
-
-### 3. Generate Metadata (`meta.json`)
-
-`axaml-ls` expects a metadata index file to function. By default, it looks at:
-`~/.local/share/axaml-ls/meta.json` (or you can override it via the `AXAML_META` environment variable).
-
-Use `axaml-meta` to generate this file from your Avalonia reference assemblies and XML documentation files:
-
-```bash
-cd ../axaml-meta
-cargo run --release -- /path/to/avalonia/dlls/ folder > ~/.local/share/axaml-ls/meta.json
-
-```
-
----
-
-## Zed Configuration
-
-To make Zed use `axaml-ls` for `.axaml` files, add the following language server configuration to your Zed settings (`~/.config/zed/settings.json`):
-
-```json
-{
-  "languages": {
-    "XAML": {
-      "language_servers": ["axaml-ls"]
-    }
-  },
-  "lsp": {
-    "axaml-ls": {}
-  }
-}
-```
-
----
-
-## License & Third-Party
-
-This project is open-source and available under the MIT License.
-See [THIRD-PARTY](THIRD-PARTY) for details regarding third-party code used in this repository.
