@@ -30,8 +30,26 @@ Install **AXAML** directly from the Zed Extensions marketplace. On first launch,
 If you want to build and use a local version (the extension prioritizes `axaml-ls` found in `PATH`):
 
 ```bash
-git clone [https://github.com/YaeKitsune13/zed-axaml.git](https://github.com/YaeKitsune13/zed-axaml.git)
+git clone https://github.com/YaeKitsune13/zed-axaml.git
 cd zed-axaml/axaml-ls
 cargo build --release
 install -Dm755 target/release/axaml-ls ~/.local/bin/axaml-ls
 ```
+
+To generate a custom `meta.json` for a specific Avalonia version or third-party control libraries (such as `Avalonia.Controls.DataGrid`):
+
+```bash
+cd ../axaml-meta
+mkdir -p ~/.local/share/axaml-ls
+cargo run --release -- /path/to/avalonia/dlls > ~/.local/share/axaml-ls/meta.json
+```
+
+You can also point `axaml-ls` to any metadata file via the `AXAML_META` environment variable.
+
+## Development Note
+
+AI coding assistants were used during the development of this project for boilerplate generation, refactoring, and documentation.
+
+## License & Third-Party
+
+This project is licensed under the MIT License. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for details regarding third-party files used in this repository.
