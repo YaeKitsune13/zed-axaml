@@ -180,14 +180,14 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let dir = PathBuf::from(
         args.next()
-            .expect("использование: axaml-meta <папка с dll и xml> [полное имя типа]"),
+            .expect("usage: axaml-meta <dir with dll and xml> [FullTypeName]"),
     );
     let only = args.next();
 
     let docs = load_docs(&dir);
 
     let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .expect("не удалось открыть папку")
+        .expect("failed to open directory")
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "dll"))
@@ -197,7 +197,7 @@ fn main() {
     // байты должны жить дольше, чем Resolution, который на них ссылается
     let blobs: Vec<Vec<u8>> = paths
         .iter()
-        .map(|p| std::fs::read(p).expect("не удалось прочитать dll"))
+        .map(|p| std::fs::read(p).expect("failed to read dll"))
         .collect();
 
     let resolutions: Vec<Resolution> = blobs
@@ -275,7 +275,7 @@ fn main() {
                         cur = t.base.clone();
                     }
                     None => {
-                        println!("{n}  (вне загруженных сборок)");
+                        println!("{n}  (outside loaded assemblies)");
                         break;
                     }
                 }

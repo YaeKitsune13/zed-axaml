@@ -22,27 +22,27 @@ pub struct TypeMeta {
 pub const X_DIRECTIVES: &[(&str, &str)] = &[
     (
         "x:Name",
-        "Имя экземпляра контрола для обращения из C# кода (code-behind) и привязок.",
+        "Control instance name for accessing from C# code-behind and bindings.",
     ),
     (
         "x:DataType",
-        "Тип контекста данных (ViewModel) для компилируемых привязок {CompiledBinding}.",
+        "Data context type (ViewModel) for {CompiledBinding} expressions.",
     ),
     (
         "x:Class",
-        "Полное имя C# класса (Namespace.ClassName), связанного с этим XAML-файлом.",
+        "Full C# class name (Namespace.ClassName) associated with this XAML file.",
     ),
     (
         "x:Key",
-        "Уникальный ключ ресурса в словаре Resources или Styles.",
+        "Unique resource key in a Resources or Styles dictionary.",
     ),
     (
         "x:CompileBindings",
-        "Включает или отключает компилируемые привязки по умолчанию (True / False).",
+        "Enables or disables compiled bindings by default (True / False).",
     ),
     (
         "x:FieldModifier",
-        "Модификатор доступа сгенерированного поля в C# (public, internal, private).",
+        "Access modifier of the generated C# field (public, internal, private).",
     ),
 ];
 
@@ -63,44 +63,44 @@ pub const EXTRA_TAGS: &[(&str, &str, &str)] = &[
     (
         "DataTemplate",
         "Avalonia.Markup.Xaml.Templates.DataTemplate",
-        "Шаблон отображения данных для элементов коллекции (ItemTemplate).",
+        "Data template for rendering collection items (ItemTemplate).",
     ),
     (
         "ControlTemplate",
         "Avalonia.Markup.Xaml.Templates.ControlTemplate",
-        "Шаблон визуального дерева контрола.",
+        "Control visual tree template.",
     ),
     (
         "RowDefinition",
         "Avalonia.Controls.RowDefinition",
-        "Определение строки в Grid.",
+        "Grid row definition.",
     ),
     (
         "ColumnDefinition",
         "Avalonia.Controls.ColumnDefinition",
-        "Определение столбца в Grid.",
+        "Grid column definition.",
     ),
 ];
 
 pub const TAG_SNIPPETS: &[(&str, &str, &str)] = &[
     (
         "ax-itemtemplate",
-        "Шаблон карточки ListBox.ItemTemplate с DataTemplate и Border",
+        "ListBox.ItemTemplate card snippet with DataTemplate and Border",
         "ListBox.ItemTemplate>\n\t<DataTemplate>\n\t\t<Border BorderBrush=\"Gray\" BorderThickness=\"1\" CornerRadius=\"5\" Padding=\"10\" Margin=\"5\">\n\t\t\t$0\n\t\t</Border>\n\t</DataTemplate>\n</ListBox.ItemTemplate>",
     ),
     (
         "ax-grid",
-        "Grid с заданными ColumnDefinitions и RowDefinitions",
+        "Grid with predefined ColumnDefinitions and RowDefinitions",
         "Grid ColumnDefinitions=\"${1:*, *}\" RowDefinitions=\"${2:Auto, *}\">\n\t$0\n</Grid>",
     ),
     (
         "ax-stack-h",
-        "Горизонтальный StackPanel с отступами",
+        "Horizontal StackPanel with spacing",
         "StackPanel Orientation=\"Horizontal\" Spacing=\"${1:10}\">\n\t$0\n</StackPanel>",
     ),
     (
         "ax-dock",
-        "Каркас DockPanel с верхней шапкой и основным контентом",
+        "DockPanel layout with top header and main content",
         "DockPanel Margin=\"${1:15}\">\n\t<StackPanel DockPanel.Dock=\"Top\" Orientation=\"Horizontal\" Spacing=\"10\" Margin=\"0,0,0,10\">\n\t\t$0\n\t</StackPanel>\n</DockPanel>",
     ),
 ];
@@ -108,27 +108,27 @@ pub const TAG_SNIPPETS: &[(&str, &str, &str)] = &[
 pub const BINDING_SNIPPETS: &[(&str, &str, &str)] = &[
     (
         "{Binding}",
-        "Привязка к свойству контекста данных",
+        "Binding to a data context property",
         "{Binding $0}",
     ),
     (
         "{Binding StringFormat}",
-        "Привязка с форматированием строки (например, цена в ₽)",
+        "Binding with StringFormat (e.g. currency)",
         "{Binding ${1:Property}, StringFormat='{}{0}${2: ₽}'}",
     ),
     (
         "{CompiledBinding}",
-        "Компилируемая привязка (требует x:DataType)",
+        "Compiled binding (requires x:DataType)",
         "{CompiledBinding $0}",
     ),
     (
         "{StaticResource}",
-        "Ссылка на статический ресурс по ключу",
+        "Reference to a static resource by key",
         "{StaticResource $0}",
     ),
     (
         "{DynamicResource}",
-        "Ссылка на динамический ресурс по ключу",
+        "Reference to a dynamic resource by key",
         "{DynamicResource $0}",
     ),
 ];

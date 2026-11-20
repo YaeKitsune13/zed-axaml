@@ -83,9 +83,9 @@ impl tower_lsp::LanguageServer for Backend {
 
     async fn initialized(&self, _: InitializedParams) {
         let msg = if self.index.is_some() {
-            "axaml-ls: метаданные загружены"
+            "axaml-ls: metadata loaded"
         } else {
-            "axaml-ls: meta.json не найден"
+            "axaml-ls: meta.json not found"
         };
         self.client.log_message(MessageType::INFO, msg).await;
     }

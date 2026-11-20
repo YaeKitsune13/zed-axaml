@@ -386,7 +386,7 @@ pub fn create_handler(
         .unwrap_or("code-behind")
         .to_string();
     Some(CodeAction {
-        title: format!("Создать обработчик {handler} в {file}"),
+        title: format!("Generate handler {handler} in {file}"),
         kind: Some(CodeActionKind::QUICKFIX),
         edit: Some(WorkspaceEdit {
             changes: Some(changes),
@@ -421,11 +421,11 @@ pub fn handler_completion(
     Some(CompletionItem {
         label: name.clone(),
         kind: Some(CompletionItemKind::METHOD),
-        detail: Some(format!("создать обработчик в {file}")),
+        detail: Some(format!("generate handler in {file}")),
         sort_text: Some("0".to_string()),
         insert_text: Some(name.clone()),
         command: Some(Command {
-            title: "Создать обработчик".to_string(),
+            title: "Generate event handler".to_string(),
             command: CREATE_HANDLER.to_string(),
             arguments: Some(vec![
                 json!(uri.as_str()),
@@ -500,7 +500,7 @@ pub fn missing_handler_diagnostics(
                         range: byte_range_to_lsp(text, val_off, val_off + val.len()),
                         severity: Some(DiagnosticSeverity::ERROR),
                         source: Some("axaml-ls".to_string()),
-                        message: format!("Некорректное имя обработчика события: '{trimmed}'"),
+                        message: format!("Invalid event handler name: '{trimmed}'"),
                         ..Default::default()
                     });
                 } else if !has_method(&t.text, trimmed) {
@@ -509,7 +509,7 @@ pub fn missing_handler_diagnostics(
                         severity: Some(DiagnosticSeverity::WARNING),
                         source: Some("axaml-ls".to_string()),
                         message: format!(
-                            "Обработчик '{trimmed}' не найден в {}",
+                            "Handler '{trimmed}' not found in {}",
                             t.path.file_name().and_then(|f| f.to_str()).unwrap_or("code-behind")
                         ),
                         ..Default::default()
@@ -606,8 +606,8 @@ pub fn create_view_actions(uri: &Url, text: &str, off: usize) -> Vec<CodeAction>
 
     let mut out = Vec::new();
     for (kind, name, title) in [
-        ("UserControl", uc_name, "Создать Avalonia UserControl"),
-        ("Window", win_name, "Создать Avalonia Window"),
+        ("UserControl", uc_name, "Create Avalonia UserControl"),
+        ("Window", win_name, "Create Avalonia Window"),
     ] {
         out.push(CodeAction {
             title: format!("{title}: {name} (.axaml + .axaml.cs)"),
@@ -730,8 +730,8 @@ pub fn init_empty_file_actions(uri: &Url, text: &str) -> Vec<CodeAction> {
 
     let mut out = Vec::new();
     for (kind, title) in [
-        ("UserControl", format!("Инициализировать {stem} как Avalonia UserControl")),
-        ("Window", format!("Инициализировать {stem} как Avalonia Window")),
+        ("UserControl", format!("Initialize {stem} as Avalonia UserControl")),
+        ("Window", format!("Initialize {stem} as Avalonia Window")),
     ] {
         let (axaml_content, _) = build_view_texts(&ns, kind, stem);
         let mut changes = HashMap::new();
@@ -751,7 +751,7 @@ pub fn init_empty_file_actions(uri: &Url, text: &str) -> Vec<CodeAction> {
                 ..Default::default()
             }),
             command: Some(Command {
-                title: "Создать code-behind".to_string(),
+                title: "Create code-behind".to_string(),
                 command: INIT_VIEW_CS.to_string(),
                 arguments: Some(vec![json!(uri.as_str()), json!(kind), json!(stem)]),
             }),
@@ -783,8 +783,8 @@ pub fn init_empty_file_completions(uri: &Url, text: &str) -> Vec<CompletionItem>
 
     let mut out = Vec::new();
     for (label, kind, desc) in [
-        ("ax-usercontrol", "UserControl", format!("Каркас UserControl для {stem} (+ .axaml.cs)")),
-        ("ax-window", "Window", format!("Каркас Window для {stem} (+ .axaml.cs)")),
+        ("ax-usercontrol", "UserControl", format!("UserControl scaffold for {stem} (+ .axaml.cs)")),
+        ("ax-window", "Window", format!("Window scaffold for {stem} (+ .axaml.cs)")),
     ] {
         let (axaml_content, _) = build_view_texts(&ns, kind, stem);
         out.push(CompletionItem {
@@ -797,7 +797,7 @@ pub fn init_empty_file_completions(uri: &Url, text: &str) -> Vec<CompletionItem>
                 new_text: axaml_content,
             })),
             command: Some(Command {
-                title: "Создать code-behind".to_string(),
+                title: "Create code-behind".to_string(),
                 command: INIT_VIEW_CS.to_string(),
                 arguments: Some(vec![json!(uri.as_str()), json!(kind), json!(stem)]),
             }),

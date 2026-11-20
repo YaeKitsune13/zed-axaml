@@ -580,7 +580,7 @@ impl WorkspaceData {
                         range: byte_range_to_lsp(text, val_off, val_off + val.len()),
                         severity: Some(DiagnosticSeverity::WARNING),
                         source: Some("axaml-ls".to_string()),
-                        message: format!("Свойство или команда '{path}' не найдены в {cls_name}"),
+                        message: format!("Property or command '{path}' not found on {cls_name}"),
                         ..Default::default()
                     });
                 }

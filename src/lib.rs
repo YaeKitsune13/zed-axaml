@@ -19,12 +19,12 @@ impl AxamlExtension {
             .map(|(_, h)| format!("{h}/.local/share/axaml-ls/meta.json"))
             .filter(|p| fs::metadata(p).is_ok());
 
-        // 1. Локально установленный бинарник в PATH (удобно для разработки)
+        // 1. Locally installed binary in PATH (useful for development)
         if let Some(path) = worktree.which("axaml-ls") {
             return Ok((path, local_meta));
         }
 
-        // 2. Уже скачанный бинарник в рабочей директории расширения
+        // 2. Already downloaded binary in extension working directory
         if let Some(path) = &self.cached_binary_path {
             if fs::metadata(path).map_or(false, |m| m.is_file()) {
                 let meta = fs::metadata("meta.json")
@@ -36,7 +36,7 @@ impl AxamlExtension {
             }
         }
 
-        // 3. Скачивание из GitHub Releases
+        // 3. Download from GitHub Releases
         zed::set_language_server_installation_status(
             language_server_id,
             &zed::LanguageServerInstallationStatus::CheckingForUpdate,
@@ -57,7 +57,7 @@ impl AxamlExtension {
             (zed::Os::Mac, zed::Architecture::X8664) => "x86_64-apple-darwin",
             (zed::Os::Mac, zed::Architecture::Aarch64) => "aarch64-apple-darwin",
             (zed::Os::Windows, zed::Architecture::X8664) => "x86_64-pc-windows-msvc",
-            _ => return Err(format!("Неподдерживаемая платформа: {platform:?} {arch:?}")),
+            _ => return Err(format!("Unsupported platform: {platform:?} {arch:?}")),
         };
 
         let archive_ext = match platform {
@@ -70,7 +70,7 @@ impl AxamlExtension {
             .assets
             .iter()
             .find(|a| a.name == asset_name)
-            .ok_or_else(|| format!("Релиз {} не содержит архив {asset_name}", release.version))?;
+            .ok_or_else(|| format!("Release {} does not contain archive {asset_name}", release.version))?;
 
         let version_dir = format!("axaml-ls-{}", release.version);
         let binary_name = match platform {
@@ -91,10 +91,10 @@ impl AxamlExtension {
             };
 
             zed::download_file(&asset.download_url, &version_dir, file_type)
-                .map_err(|e| format!("Ошибка загрузки axaml-ls: {e}"))?;
+                .map_err(|e| format!("Failed to download axaml-ls: {e}"))?;
             zed::make_file_executable(&binary_path)?;
 
-            // Чистим старые версии
+            // Clean up old versions
             if let Ok(entries) = fs::read_dir(".") {
                 for entry in entries.flatten() {
                     let name = entry.file_name();
@@ -107,7 +107,7 @@ impl AxamlExtension {
             }
         }
 
-        // Скачиваем meta.json из релиза, если локального нет
+        // Download meta.json from release if not present locally
         let mut resolved_meta = local_meta;
         if resolved_meta.is_none() {
             let meta_file = "meta.json";

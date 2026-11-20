@@ -222,7 +222,7 @@ impl Index {
                 vec![CompletionItem {
                     label: name,
                     kind: Some(CompletionItemKind::CLASS),
-                    detail: Some("закрывающий тег".to_string()),
+                    detail: Some("closing tag".to_string()),
                     text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                         range: replace,
                         new_text,
@@ -353,15 +353,15 @@ impl Index {
                     let mut items = Vec::new();
                     if let Some((base, _)) = prefix.rsplit_once(':') {
                         for &(pseudo, desc) in &[
-                            (":pointerover", "Курсор наведён на элемент"),
-                            (":pressed", "Элемент нажат"),
-                            (":focus", "Элемент в фокусе"),
-                            (":focus-visible", "Видимый фокус с клавиатуры"),
-                            (":disabled", "Элемент отключён (IsEnabled=False)"),
-                            (":checked", "Отмеченное состояние (CheckBox, ToggleButton)"),
-                            (":unchecked", "Неотмеченное состояние"),
-                            (":selected", "Выбранный элемент (ListBoxItem, TabItem)"),
-                            (":empty", "Пустое поле ввода"),
+                            (":pointerover", "Pointer is hovering over the element"),
+                            (":pressed", "Element is pressed"),
+                            (":focus", "Element has focus"),
+                            (":focus-visible", "Visible keyboard focus"),
+                            (":disabled", "Element is disabled (IsEnabled=False)"),
+                            (":checked", "Checked state (CheckBox, ToggleButton)"),
+                            (":unchecked", "Unchecked state"),
+                            (":selected", "Selected state (ListBoxItem, TabItem)"),
+                            (":empty", "Empty input field"),
                         ] {
                             let full_sel = format!("{base}{pseudo}");
                             items.push(CompletionItem {
@@ -629,7 +629,7 @@ impl Index {
                                 ),
                                 severity: Some(DiagnosticSeverity::ERROR),
                                 source: Some("axaml-ls".to_string()),
-                                message: format!("Незакрытый тег <{unclosed_name}>"),
+                                message: format!("Unclosed tag <{unclosed_name}>"),
                                 ..Default::default()
                             });
                         }
@@ -644,7 +644,7 @@ impl Index {
                             severity: Some(DiagnosticSeverity::ERROR),
                             source: Some("axaml-ls".to_string()),
                             message: format!(
-                                "Закрывающий тег </{}> не имеет соответствующего открывающего тега",
+                                "Closing tag </{}> has no matching opening tag",
                                 tag.name
                             ),
                             ..Default::default()
@@ -675,7 +675,7 @@ impl Index {
                             ),
                             severity: Some(DiagnosticSeverity::WARNING),
                             source: Some("axaml-ls".to_string()),
-                            message: format!("Неизвестное свойство <{}> у {owner}", tag.name),
+                            message: format!("Unknown property <{}> on {owner}", tag.name),
                             ..Default::default()
                         });
                     }
@@ -688,7 +688,7 @@ impl Index {
                     range: byte_range_to_lsp(text, tag.name_off, tag.name_off + tag.name.len()),
                     severity: Some(DiagnosticSeverity::WARNING),
                     source: Some("axaml-ls".to_string()),
-                    message: format!("Неизвестный контрол или тег Avalonia: <{}>", tag.name),
+                    message: format!("Unknown Avalonia control or tag: <{}>", tag.name),
                     ..Default::default()
                 });
                 continue;
@@ -721,7 +721,7 @@ impl Index {
                         severity: Some(DiagnosticSeverity::WARNING),
                         source: Some("axaml-ls".to_string()),
                         message: format!(
-                            "Неизвестное свойство или событие '{aname}' у <{}>",
+                            "Unknown property or event '{aname}' on <{}>",
                             tag.name
                         ),
                         ..Default::default()
@@ -735,7 +735,7 @@ impl Index {
                 range: byte_range_to_lsp(text, unclosed_off, unclosed_off + unclosed_name.len()),
                 severity: Some(DiagnosticSeverity::ERROR),
                 source: Some("axaml-ls".to_string()),
-                message: format!("Незакрытый тег <{unclosed_name}>"),
+                message: format!("Unclosed tag <{unclosed_name}>"),
                 ..Default::default()
             });
         }
