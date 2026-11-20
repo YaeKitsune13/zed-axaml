@@ -762,7 +762,7 @@ dependencies = [
 
 [[package]]
 name = "zed-axaml"
-version = "0.4.1"
+version = "0.2.0"
 dependencies = [
  "zed_extension_api",
 ]
