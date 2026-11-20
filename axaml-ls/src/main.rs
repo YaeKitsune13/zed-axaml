@@ -1,3 +1,5 @@
+mod workspace;
+mod actions;
 mod backend;
 mod index;
 mod metadata;

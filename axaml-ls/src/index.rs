@@ -6,6 +6,7 @@ use crate::parser::{byte_range_to_lsp, inside_quotes, is_ident_char, scan, Ctx, 
 use std::collections::{HashMap, HashSet};
 use tower_lsp::lsp_types::*;
 
+#[allow(dead_code)]
 pub struct EventAtCursor {
     pub tag_name: String,
     pub event_name: String,
@@ -37,6 +38,7 @@ impl Index {
                 events: vec![],
                 summary: summary.to_string(),
                 docs: HashMap::new(),
+                event_args: HashMap::new(),
             });
         }
 
@@ -339,21 +341,134 @@ impl Index {
                 items
             }
             Ctx::AttrValue {
-                tag: _,
+                tag,
                 attr,
                 prefix,
                 replace,
+                ancestors,
+                tag_attrs,
             } => {
+                // Подсказки для <Style Selector="...">
+                if tag == "Style" && attr == "Selector" {
+                    let mut items = Vec::new();
+                    if let Some((base, _)) = prefix.rsplit_once(':') {
+                        for &(pseudo, desc) in &[
+                            (":pointerover", "Курсор наведён на элемент"),
+                            (":pressed", "Элемент нажат"),
+                            (":focus", "Элемент в фокусе"),
+                            (":focus-visible", "Видимый фокус с клавиатуры"),
+                            (":disabled", "Элемент отключён (IsEnabled=False)"),
+                            (":checked", "Отмеченное состояние (CheckBox, ToggleButton)"),
+                            (":unchecked", "Неотмеченное состояние"),
+                            (":selected", "Выбранный элемент (ListBoxItem, TabItem)"),
+                            (":empty", "Пустое поле ввода"),
+                        ] {
+                            let full_sel = format!("{base}{pseudo}");
+                            items.push(CompletionItem {
+                                label: full_sel.clone(),
+                                sort_text: Some(format!("0_{pseudo}")),
+                                kind: Some(CompletionItemKind::KEYWORD),
+                                detail: Some(desc.to_string()),
+                                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                                    range: replace,
+                                    new_text: full_sel,
+                                })),
+                                ..Default::default()
+                            });
+                        }
+                        return items;
+                    }
+
+                    let lead = match prefix.rfind(|c: char| c.is_whitespace() || c == '>') {
+                        Some(idx) => &prefix[..=idx],
+                        None => "",
+                    };
+                    for (name, full) in &self.tags {
+                        let new_text = format!("{lead}{name}");
+                        items.push(CompletionItem {
+                            label: name.clone(),
+                            sort_text: Some(format!("1_{name}")),
+                            kind: Some(CompletionItemKind::CLASS),
+                            detail: Some(full.clone()),
+                            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                                range: replace,
+                                new_text,
+                            })),
+                            ..Default::default()
+                        });
+                    }
+                    return items;
+                }
+
+                // Подсказки для <Setter Property="..."> внутри <Style Selector="...">
+                if tag == "Setter" && attr == "Property" {
+                    if let Some(target_tag) = ancestors.iter().rev().find_map(|a| a.strip_prefix("Style:")) {
+                        let mut seen = HashSet::new();
+                        let mut items = Vec::new();
+                        if let Some((_, full)) = self.tags.iter().find(|(n, _)| n == target_tag) {
+                            for t in self.chain(full) {
+                                for p in &t.properties {
+                                    if p == "Item" || !seen.insert(p.clone()) {
+                                        continue;
+                                    }
+                                    items.push(CompletionItem {
+                                        label: p.clone(),
+                                        sort_text: Some(format!("0_{p}")),
+                                        kind: Some(CompletionItemKind::PROPERTY),
+                                        detail: Some(format!("{}.{}", t.name, p)),
+                                        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                                            range: replace,
+                                            new_text: p.clone(),
+                                        })),
+                                        ..Default::default()
+                                    });
+                                }
+                            }
+                        }
+                        for t in self.types.values() {
+                            if !matches!(t.name.as_str(), "Grid" | "DockPanel" | "Canvas" | "ToolTip" | "ScrollViewer") {
+                                continue;
+                            }
+                            for a in &t.attached {
+                                let label = format!("{}.{}", t.name, a);
+                                if seen.insert(label.clone()) {
+                                    items.push(CompletionItem {
+                                        label: label.clone(),
+                                        sort_text: Some(format!("2_{label}")),
+                                        kind: Some(CompletionItemKind::PROPERTY),
+                                        detail: Some("attached property".to_string()),
+                                        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                                            range: replace,
+                                            new_text: label,
+                                        })),
+                                        ..Default::default()
+                                    });
+                                }
+                            }
+                        }
+                        return items;
+                    }
+                }
+
+                let effective_attr = if tag == "Setter" && attr == "Value" {
+                    tag_attrs
+                        .iter()
+                        .find(|(k, _)| k == "Property")
+                        .map(|(_, v)| v.as_str())
+                        .unwrap_or(attr.as_str())
+                } else {
+                    attr.as_str()
+                };
                 let mut items = Vec::new();
 
                 // 1. Если ещё не начали писать '{', предлагаем Enum-значения для конкретного атрибута
                 if !prefix.starts_with('{') {
-                    for &val in enum_values_for_attr(&attr) {
+                    for &val in enum_values_for_attr(effective_attr) {
                         items.push(CompletionItem {
                             label: val.to_string(),
                             sort_text: Some(format!("0_{val}")),
                             kind: Some(CompletionItemKind::ENUM_MEMBER),
-                            detail: Some(format!("{attr} value")),
+                            detail: Some(format!("{effective_attr} value")),
                             text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                                 range: replace,
                                 new_text: val.to_string(),

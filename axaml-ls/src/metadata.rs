@@ -15,6 +15,8 @@ pub struct TypeMeta {
     pub summary: String,
     #[serde(default)]
     pub docs: HashMap<String, String>,
+    #[serde(default)]
+    pub event_args: HashMap<String, String>,
 }
 
 pub const X_DIRECTIVES: &[(&str, &str)] = &[

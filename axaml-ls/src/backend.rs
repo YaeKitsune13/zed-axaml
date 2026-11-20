@@ -1,5 +1,7 @@
+use crate::actions;
 use crate::index::Index;
-use crate::parser::{byte_range_to_lsp, context, format_document, offset, offset_to_position};
+use crate::parser::{byte_range_to_lsp, context, format_document, offset, Ctx};
+use crate::workspace::{parse_xmlns_map, resolve_xml_type, WorkspaceData};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tower_lsp::jsonrpc::Result;
@@ -15,7 +17,15 @@ pub struct Backend {
 impl Backend {
     async fn validate(&self, uri: Url, text: &str) {
         if let Some(index) = &self.index {
-            let diags = index.diagnostics(text);
+            let mut diags = index.diagnostics(text);
+            let handler_diags = {
+                let docs = self.docs.lock().unwrap();
+                actions::missing_handler_diagnostics(index, &docs, &uri, text)
+            };
+            crate::workspace::sync_named_controls_g_cs(&uri, text);
+            let ws = WorkspaceData::scan_for_file(&uri, text);
+            diags.extend(handler_diags);
+            diags.extend(ws.binding_diagnostics(text));
             self.client.publish_diagnostics(uri, diags, None).await;
         }
     }
@@ -26,13 +36,17 @@ impl tower_lsp::LanguageServer for Backend {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
+                execute_command_provider: Some(ExecuteCommandOptions {
+                    commands: vec![actions::CREATE_HANDLER.to_string(), actions::CREATE_VIEW.to_string(), actions::INIT_VIEW_CS.to_string()],
+                    ..Default::default()
+                }),
                 document_formatting_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
-                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec![
                         "<".into(),
@@ -131,18 +145,89 @@ impl tower_lsp::LanguageServer for Backend {
         let uri = p.text_document_position.text_document.uri;
         let pos = p.text_document_position.position;
 
-        let ctx = {
+        let (text, off, ctx, extra) = {
             let docs = self.docs.lock().unwrap();
-            let Some(text) = docs.get(&uri) else {
+            let Some(text) = docs.get(&uri).cloned() else {
                 return Ok(None);
             };
-            let Some(off) = offset(text, pos) else {
+            let Some(off) = offset(&text, pos) else {
                 return Ok(None);
             };
-            context(text, off, pos)
+            let ctx = context(&text, off, pos);
+            let extra = actions::handler_completion(index, &docs, &uri, &text, off);
+            (text, off, ctx, extra)
         };
 
-        Ok(Some(CompletionResponse::Array(index.complete(ctx))))
+        let mut ws_items = Vec::new();
+        match &ctx {
+            Ctx::AttrValue { prefix, replace, .. } => {
+                let ws = WorkspaceData::scan_for_file(&uri, &text);
+                ws_items.extend(ws.complete_attr_value(&text, off, prefix, *replace));
+            }
+            Ctx::Attr { tag, replace, .. } if tag.contains(':') => {
+                let ws = WorkspaceData::scan_for_file(&uri, &text);
+                let xmlns = parse_xmlns_map(&text);
+                let (ns, cls_name) = resolve_xml_type(tag, &xmlns);
+                if ws.is_control_class(&ns, &cls_name) {
+                    if let Some(cls) = ws.find_class(&ns, &cls_name) {
+                        for m in &cls.members {
+                            ws_items.push(CompletionItem {
+                                label: m.name.clone(),
+                                sort_text: Some(format!("1_{}", m.name)),
+                                kind: Some(CompletionItemKind::PROPERTY),
+                                detail: Some(format!("{cls_name}.{} ({})", m.name, m.member_type)),
+                                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                                    range: *replace,
+                                    new_text: format!("{}=\"$0\"", m.name),
+                                })),
+                                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+            }
+            Ctx::Tag { replace, has_close_bracket, .. } => {
+                let ws = WorkspaceData::scan_for_file(&uri, &text);
+                let xmlns = parse_xmlns_map(&text);
+                for (prefix, ns) in &xmlns {
+                    if matches!(prefix.as_str(), "x" | "d" | "mc") {
+                        continue;
+                    }
+                    for cls in &ws.classes {
+                        if cls.namespace == *ns && ws.is_control_class(ns, &cls.name) {
+                            let label = format!("{prefix}:{}", cls.name);
+                            let new_text = if *has_close_bracket {
+                                label.clone()
+                            } else {
+                                format!("{label}>$0</{label}>")
+                            };
+                            ws_items.push(CompletionItem {
+                                label: label.clone(),
+                                sort_text: Some(format!("1_{label}")),
+                                kind: Some(CompletionItemKind::CLASS),
+                                detail: Some(format!("{}.{}", cls.namespace, cls.name)),
+                                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                                    range: *replace,
+                                    new_text,
+                                })),
+                                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        let mut items = index.complete(ctx);
+        items.extend(actions::init_empty_file_completions(&uri, &text));
+        items.extend(ws_items);
+        if let Some(item) = extra {
+            items.insert(0, item);
+        }
+        Ok(Some(CompletionResponse::Array(items)))
     }
 
     async fn hover(&self, p: HoverParams) -> Result<Option<Hover>> {
@@ -172,16 +257,33 @@ impl tower_lsp::LanguageServer for Backend {
         let uri = p.text_document_position_params.text_document.uri;
         let pos = p.text_document_position_params.position;
 
-        let ev = {
+        let (text, off, ev, class_loc) = {
             let docs = self.docs.lock().unwrap();
-            let Some(text) = docs.get(&uri) else {
+            let Some(text) = docs.get(&uri).cloned() else {
                 return Ok(None);
             };
-            let Some(off) = offset(text, pos) else {
+            let Some(off) = offset(&text, pos) else {
                 return Ok(None);
             };
-            index.event_at_offset(text, off)
+            (
+                text.clone(),
+                off,
+                index.event_at_offset(&text, off),
+                actions::goto_x_class(&docs, &uri, &text, off),
+            )
         };
+
+        if let Some(loc) = class_loc {
+            return Ok(Some(GotoDefinitionResponse::Scalar(loc)));
+        }
+
+        let ws = WorkspaceData::scan_for_file(&uri, &text);
+        if let Some(res_loc) = ws.goto_resource(&text, off) {
+            return Ok(Some(GotoDefinitionResponse::Scalar(res_loc)));
+        }
+        if let Some(type_loc) = ws.goto_type(&text, off) {
+            return Ok(Some(GotoDefinitionResponse::Scalar(type_loc)));
+        }
 
         let Some(ev) = ev else {
             return Ok(None);
@@ -218,7 +320,7 @@ impl tower_lsp::LanguageServer for Backend {
         let uri = p.text_document.uri;
         let pos = p.range.start;
 
-        let ev = {
+        let list = {
             let docs = self.docs.lock().unwrap();
             let Some(text) = docs.get(&uri) else {
                 return Ok(None);
@@ -226,65 +328,101 @@ impl tower_lsp::LanguageServer for Backend {
             let Some(off) = offset(text, pos) else {
                 return Ok(None);
             };
-            index.event_at_offset(text, off)
+            let mut res = Vec::new();
+            if let Some(a) = actions::create_handler(index, &docs, &uri, text, off) {
+                res.push(CodeActionOrCommand::CodeAction(a));
+            }
+            for a in actions::init_empty_file_actions(&uri, text) {
+                res.push(CodeActionOrCommand::CodeAction(a));
+            }
+            for a in actions::create_view_actions(&uri, text, off) {
+                res.push(CodeActionOrCommand::CodeAction(a));
+            }
+            res
         };
 
-        let Some(ev) = ev else {
-            return Ok(None);
+        if list.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(list))
+        }
+    }
+
+    async fn execute_command(&self, p: ExecuteCommandParams) -> Result<Option<serde_json::Value>> {
+        let arg = |i: usize| {
+            p.arguments
+                .get(i)
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
         };
 
-        let Ok(axaml_path) = uri.to_file_path() else {
-            return Ok(None);
-        };
-        let cs_path = axaml_path.with_extension("axaml.cs");
-        let Ok(cs_text) = std::fs::read_to_string(&cs_path) else {
-            return Ok(None);
-        };
-        if cs_text.contains(&format!("void {}", ev.handler_name)) {
+
+        if p.command == actions::INIT_VIEW_CS {
+            if let (Some(uri_s), Some(kind), Some(name)) = (arg(0), arg(1), arg(2)) {
+                if let Ok(uri) = Url::parse(&uri_s) {
+                    actions::run_init_view_cs(&uri, &kind, &name);
+                }
+            }
             return Ok(None);
         }
 
-        let Some(insert_off) = find_class_insert_offset(&cs_text) else {
+        if p.command == actions::CREATE_VIEW {
+            if let (Some(uri_s), Some(kind), Some(name)) = (arg(0), arg(1), arg(2)) {
+                if let Ok(uri) = Url::parse(&uri_s) {
+                    if let Some(created) = actions::run_create_view(&uri, &kind, &name) {
+                        if let Ok(target_uri) = Url::from_file_path(&created) {
+                            let _ = self
+                                .client
+                                .show_document(ShowDocumentParams {
+                                    uri: target_uri,
+                                    external: Some(false),
+                                    take_focus: Some(true),
+                                    selection: None,
+                                })
+                                .await;
+                        }
+                    }
+                }
+            }
+            return Ok(None);
+        }
+
+        if p.command != actions::CREATE_HANDLER {
+            return Ok(None);
+        }
+        let Some(index) = &self.index else {
             return Ok(None);
         };
-        let Ok(cs_uri) = Url::from_file_path(&cs_path) else {
+        let arg = |i: usize| {
+            p.arguments
+                .get(i)
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        };
+        let (Some(uri), Some(tag), Some(event), Some(handler)) = (arg(0), arg(1), arg(2), arg(3))
+        else {
+            return Ok(None);
+        };
+        let Ok(uri) = Url::parse(&uri) else {
             return Ok(None);
         };
 
-        let args_type = event_args_type(&ev.event_name);
-        let insert_pos = offset_to_position(&cs_text, insert_off);
-        let method_stub = format!(
-            "\n    private void {}(object? sender, {} e)\n    {{\n    }}\n",
-            ev.handler_name, args_type
-        );
-
-        let mut changes = HashMap::new();
-        changes.insert(
-            cs_uri,
-            vec![TextEdit {
-                range: Range {
-                    start: insert_pos,
-                    end: insert_pos,
-                },
-                new_text: method_stub,
-            }],
-        );
-
-        let action = CodeAction {
-            title: format!(
-                "Создать обработчик '{}' в .axaml.cs ({})",
-                ev.handler_name, ev.tag_name
-            ),
-            kind: Some(CodeActionKind::QUICKFIX),
-            edit: Some(WorkspaceEdit {
-                changes: Some(changes),
-                ..Default::default()
-            }),
-            is_preferred: Some(true),
-            ..Default::default()
+        let result = {
+            let docs = self.docs.lock().unwrap();
+            actions::run_create_handler(index, &docs, &uri, &tag, &event, &handler)
+        };
+        let Some((edit, path, new_text)) = result else {
+            return Ok(None);
         };
 
-        Ok(Some(vec![CodeActionOrCommand::CodeAction(action)]))
+        let applied = match self.client.apply_edit(edit).await {
+            Ok(r) => r.applied,
+            Err(_) => false,
+        };
+        if !applied {
+            let _ = std::fs::write(&path, new_text);
+        }
+        Ok(None)
     }
 
     async fn semantic_tokens_full(
@@ -306,37 +444,4 @@ impl tower_lsp::LanguageServer for Backend {
             data,
         })))
     }
-}
-
-fn event_args_type(event_name: &str) -> &'static str {
-    match event_name {
-        "TextChanged" => "Avalonia.Controls.TextChangedEventArgs",
-        "SelectionChanged" | "SelectedDateChanged" => "Avalonia.Controls.SelectionChangedEventArgs",
-        "KeyDown" | "KeyUp" => "Avalonia.Input.KeyEventArgs",
-        "PointerPressed" => "Avalonia.Input.PointerPressedEventArgs",
-        "PointerReleased" => "Avalonia.Input.PointerReleasedEventArgs",
-        "PointerMoved" => "Avalonia.Input.PointerEventArgs",
-        "Closing" => "Avalonia.Controls.WindowClosingEventArgs",
-        _ => "Avalonia.Interactivity.RoutedEventArgs",
-    }
-}
-
-/// Находит позицию закрывающей скобки `}` класса в `.axaml.cs`
-fn find_class_insert_offset(cs_text: &str) -> Option<usize> {
-    let class_pos = cs_text.find("class ")?;
-    let open_brace = cs_text[class_pos..].find('{')? + class_pos;
-    let mut depth = 0i32;
-    for (i, ch) in cs_text[open_brace..].char_indices() {
-        match ch {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(open_brace + i);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }

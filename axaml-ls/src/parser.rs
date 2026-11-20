@@ -41,11 +41,14 @@ pub enum Ctx {
         ancestors: Vec<String>,
         replace: Range,
     },
+    #[allow(dead_code)]
     AttrValue {
         tag: String,
         attr: String,
         prefix: String,
         replace: Range,
+        ancestors: Vec<String>,
+        tag_attrs: Vec<(String, String)>,
     },
 }
 
@@ -188,14 +191,40 @@ pub fn scan(text: &str) -> Vec<Tag> {
     out
 }
 
+pub fn selector_target_tag(sel: &str) -> Option<String> {
+    let last_part = sel
+        .split(|c: char| c.is_whitespace() || c == '>')
+        .filter(|s| !s.is_empty() && !s.starts_with('/'))
+        .last()?;
+    let tag = last_part
+        .split(|c: char| c == ':' || c == '.' || c == '#' || c == '[')
+        .next()?
+        .trim();
+    if tag.is_empty() {
+        None
+    } else {
+        Some(tag.rsplit('|').next().unwrap_or(tag).to_string())
+    }
+}
+
 pub fn open_stack(text: &str) -> Vec<String> {
-    let mut stack = Vec::new();
+    let mut stack: Vec<String> = Vec::new();
     for tag in scan(text) {
         match tag.kind {
-            Kind::Open => stack.push(tag.name),
+            Kind::Open => {
+                if tag.name == "Style" {
+                    if let Some(sel) = tag.attrs.iter().find(|a| a.name == "Selector").and_then(|a| a.value.as_deref()) {
+                        if let Some(target) = selector_target_tag(sel) {
+                            stack.push(format!("Style:{target}"));
+                            continue;
+                        }
+                    }
+                }
+                stack.push(tag.name);
+            }
             Kind::SelfClose => {}
             Kind::Close => {
-                if let Some(p) = stack.iter().rposition(|n| *n == tag.name) {
+                if let Some(p) = stack.iter().rposition(|n| *n == tag.name || (tag.name == "Style" && n.starts_with("Style:"))) {
                     stack.truncate(p);
                 }
             }
@@ -620,11 +649,24 @@ pub fn context(text: &str, off: usize, pos: Position) -> Ctx {
                     },
                     end: pos,
                 };
+                let ancestors = open_stack(&before[..lt]);
+                let tag_attrs = scan(&format!("<{seg}>"))
+                    .into_iter()
+                    .next()
+                    .map(|t| {
+                        t.attrs
+                            .into_iter()
+                            .filter_map(|a| Some((a.name, a.value?)))
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 return Ctx::AttrValue {
                     tag: tag_name,
                     attr,
                     prefix: val_prefix,
                     replace,
+                    ancestors,
+                    tag_attrs,
                 };
             }
             let prefix: String = seg
